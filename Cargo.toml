@@ -4,10 +4,13 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-dominator = "0.5"
 futures-signals = "0.3"
 futures-util = "0.3"
 gloo = "0.7"
 tracing = "0.1"
 wasm-bindgen = "0.2"
 web-sys = "0.3"
+
+[dependencies.dominator]
+git = "https://github.com/MDM23/rust-dominator.git"
+branch = "wip"

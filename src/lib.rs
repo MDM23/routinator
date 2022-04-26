@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::rc::Rc;
 use std::str::FromStr;
 
-use dominator::Dom;
+use dominator::{html, Dom};
 use futures_signals::signal::{LocalBoxSignal, Mutable, Signal, SignalExt};
 use handler::{Extract, Handler, HandlerContext};
 use path::{Path, Route};
@@ -43,6 +43,12 @@ pub fn goto(path: &str) {
 
         u.set_neq(target);
     });
+}
+
+pub fn router(cfg: fn(RouterFactory) -> RouterFactory) -> Dom {
+    html!("router", {
+        .child_signal(cfg(RouterFactory::default()).build())
+    })
 }
 
 pub struct RouterFactory {

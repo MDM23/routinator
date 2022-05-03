@@ -99,6 +99,8 @@ enum RouteSegment {
     Static(String),
     Param(String),
     Continue,
+    SegmentWildcard,
+    FullWildcard,
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -135,6 +137,12 @@ impl Route {
 
         loop {
             match (s.next(), p.next()) {
+                (Some(RouteSegment::FullWildcard), _) => {
+                    return Some(mtch);
+                }
+                (Some(RouteSegment::SegmentWildcard), Some(_)) => {
+                    continue;
+                }
                 (Some(RouteSegment::Static(seg)), Some(s)) if seg == s => {
                     continue;
                 }
@@ -247,6 +255,7 @@ impl<'p> Parser<'p> {
         match self.peek() {
             '{' => self.parse_param(),
             '.' => self.parse_continue(),
+            '*' => self.parse_wildcard(),
             _ => self.parse_static(),
         }
     }
@@ -273,6 +282,14 @@ impl<'p> Parser<'p> {
     fn parse_continue(&mut self) -> Option<RouteSegment> {
         match self.consume_while(|c| c == '.').as_str() {
             "..." => Some(RouteSegment::Continue),
+            _ => None,
+        }
+    }
+
+    fn parse_wildcard(&mut self) -> Option<RouteSegment> {
+        match self.consume_while(|c| c == '*').as_str() {
+            "*" => Some(RouteSegment::SegmentWildcard),
+            "**" => Some(RouteSegment::FullWildcard),
             _ => None,
         }
     }

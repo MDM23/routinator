@@ -12,5 +12,5 @@ wasm-bindgen = "0.2"
 web-sys = "0.3"
 
 [dependencies.dominator]
-git = "https://github.com/MDM23/rust-dominator.git"
-branch = "wip"
+git = "https://github.com/Pauan/rust-dominator.git"
+branch = "master"

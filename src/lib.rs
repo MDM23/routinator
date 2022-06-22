@@ -45,6 +45,15 @@ pub fn goto(path: &str) {
     });
 }
 
+/// Signals true if the current URL matches the given route.
+/// TODO: This should be context-sensitive
+pub fn signal_active(route: &str) -> impl Signal<Item = bool> {
+    URL.with(|u| {
+        let route = Route::from_str(route).unwrap();
+        u.signal_ref(move |current_path| route.matches(current_path).is_some())
+    })
+}
+
 pub fn router(cfg: fn(RouterFactory) -> RouterFactory) -> Dom {
     html!("router", {
         .child_signal(cfg(RouterFactory::default()).build())

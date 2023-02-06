@@ -1,8 +1,9 @@
 use dominator::Dom;
-use futures_signals::signal::Mutable;
 
-use crate::path::{Params, Path};
-use crate::RouterFactory;
+use crate::{
+    path::{Params, PathMatch},
+    ReadOnlyRouter, Router,
+};
 
 pub trait Handler<Args> {
     fn call(&self, args: Args) -> Option<Dom>;
@@ -54,39 +55,40 @@ where
     }
 }
 
-pub struct HandlerContext {
-    pub params: Params,
-    pub remainder: Mutable<Path>,
-}
-
 pub trait Extract {
-    fn extract(ctx: &HandlerContext) -> Self;
+    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self;
 }
 
 impl Extract for Params {
-    fn extract(ctx: &HandlerContext) -> Self {
-        ctx.params.clone()
+    fn extract(_: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
+        mtch.params.clone()
     }
 }
 
-impl Extract for RouterFactory {
-    fn extract(ctx: &HandlerContext) -> Self {
-        RouterFactory::from_signal(ctx.remainder.signal_cloned())
+impl Extract for Router {
+    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
+        Router {
+            path: router.path.clone(),
+            path_offset: mtch.segments.len(),
+            routes: Vec::new(),
+            default: None,
+            on_change: None,
+        }
     }
 }
 
 impl Extract for () {
-    fn extract(_: &HandlerContext) -> Self {}
+    fn extract(_: &ReadOnlyRouter, _: &PathMatch) -> Self {}
 }
 
 impl<A: Extract> Extract for (A,) {
-    fn extract(ctx: &HandlerContext) -> Self {
-        (A::extract(ctx),)
+    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
+        (A::extract(router, mtch),)
     }
 }
 
 impl<A: Extract, B: Extract> Extract for (A, B) {
-    fn extract(ctx: &HandlerContext) -> Self {
-        (A::extract(ctx), B::extract(ctx))
+    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
+        (A::extract(router, mtch), B::extract(router, mtch))
     }
 }

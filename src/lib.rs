@@ -1,209 +1,174 @@
-use std::borrow::Borrow;
 use std::rc::Rc;
-use std::str::FromStr;
 
-use dominator::{html, Dom};
-use futures_signals::signal::{LocalBoxSignal, Mutable, Signal, SignalExt};
-use handler::{Extract, Handler, HandlerContext};
-use path::{Path, Route};
-
-pub use path::Params;
+use dominator::{events, Dom};
+use futures_signals::signal::{Mutable, Signal, SignalExt};
+use handler::{Extract, Handler};
+use path::{Path, PathMatch};
 use wasm_bindgen::{JsValue, UnwrapThrowExt};
+use web_sys::{Element, EventTarget};
 
 mod handler;
 mod path;
 
-thread_local! {
-    static URL: Mutable<Path> = Mutable::new(
-        Path::from_str(
-            &web_sys::window()
-                .and_then(|w| w.location().pathname().ok())
-                .unwrap_or_default(),
-        )
-        .unwrap_or_default(),
-    );
+pub type RouteHandler = Rc<dyn Fn(&ReadOnlyRouter, &PathMatch) -> Option<Dom>>;
+
+#[derive(Default)]
+pub struct Router {
+    path: Mutable<Path>,
+    path_offset: usize,
+    routes: Vec<(Path, RouteHandler)>,
+    default: Option<String>,
+    on_change: Option<Box<dyn Fn(&Path)>>,
 }
 
-pub fn goto(path: &str) {
-    URL.with(|u| {
-        let path = Path::from_str(path).unwrap();
-
-        let target = if path.is_relative() {
-            u.borrow().get_cloned() + path
-        } else {
-            path
-        };
-
-        web_sys::window()
-            .unwrap()
-            .history()
-            .unwrap()
-            .push_state_with_url(&JsValue::NULL, "", Some(&target.to_string()))
-            .unwrap_throw();
-
-        u.set_neq(target);
-    });
-}
-
-/// Signals true if the current URL matches the given route.
-/// TODO: This should be context-sensitive
-pub fn signal_active(route: &str) -> impl Signal<Item = bool> {
-    URL.with(|u| {
-        let route = Route::from_str(route).unwrap();
-        u.signal_ref(move |current_path| route.matches(current_path).is_some())
-    })
-}
-
-pub fn router(cfg: fn(RouterFactory) -> RouterFactory) -> Dom {
-    html!("router", {
-        .child_signal(cfg(RouterFactory::default()).build())
-    })
-}
-
-pub struct RouterFactory {
-    path: LocalBoxSignal<'static, Path>,
-    routes: Vec<(Route, Rc<Box<dyn Fn(&HandlerContext) -> Option<Dom>>>)>,
-}
-
-impl Default for RouterFactory {
-    fn default() -> Self {
-        Self::from_signal(URL.with(|url| url.signal_cloned()))
+impl Router {
+    pub fn new() -> Self {
+        Default::default()
     }
-}
 
-impl RouterFactory {
-    pub fn from_signal(sig: impl Signal<Item = Path> + 'static) -> Self {
+    pub fn with_browser_url() -> Self {
         Self {
-            path: sig.boxed_local(),
-            routes: vec![],
+            on_change: Some(Box::new(|p| {
+                web_sys::window()
+                    .unwrap()
+                    .history()
+                    .unwrap()
+                    .push_state_with_url(&JsValue::NULL, "", Some(&p.to_string()))
+                    .unwrap_throw();
+            })),
+            path: Mutable::new(Path::new(
+                &web_sys::window()
+                    .and_then(|w| w.location().pathname().ok())
+                    .unwrap_or_default(),
+            )),
+            ..Default::default()
         }
     }
 
-    pub fn with_route<H, Args>(mut self, route: &str, handler: H) -> Self
+    pub fn readonly(&self) -> ReadOnlyRouter {
+        ReadOnlyRouter {
+            path: self.path.clone(),
+            path_offset: self.path_offset,
+            default: self.default.clone(),
+        }
+    }
+
+    pub fn add_route<H, Args>(&mut self, route: &str, handler: H)
     where
         H: Handler<Args> + 'static,
         Args: Extract,
     {
         self.routes.push((
-            Route::from_str(route).unwrap(),
-            Rc::new(Box::new(move |ctx| handler.call(Args::extract(ctx)))),
+            Path::new(route),
+            Rc::new(move |router, mtch| handler.call(Args::extract(router, mtch))),
         ));
-
-        self
     }
 
-    pub fn build(self) -> impl Signal<Item = Option<Dom>> {
-        let remainder = Mutable::new(Path::default());
+    pub fn set_default(&mut self, path: &str) {
+        self.default.replace(path.to_string());
+    }
 
-        struct RouterContext {
-            route: Route,
-            params: Params,
-            handler: Rc<Box<dyn Fn(&HandlerContext) -> Option<Dom>>>,
-        }
+    pub fn signal_active(&self, path: &str) -> impl Signal<Item = bool> {
+        self.path.signal_cloned().map({
+            let route = Path::new(path);
+            let offset = self.path_offset;
 
-        impl PartialEq for RouterContext {
+            move |path| route.matches(&path, offset).is_some()
+        })
+    }
+
+    pub fn mount(self) -> impl Signal<Item = Option<Dom>> {
+        struct InternalMatch((PathMatch, RouteHandler));
+
+        impl PartialEq for InternalMatch {
             fn eq(&self, other: &Self) -> bool {
-                self.route == other.route && self.params == other.params
+                self.0 .0 == other.0 .0
             }
         }
 
+        let router = self.readonly();
+
         self.path
-            .map({
-                let remainder = remainder.clone();
-                move |p| {
-                    self.routes.iter().find_map(|(route, handler)| {
-                        route.matches(&p).map(|m| {
-                            remainder.set(m.remainder);
-                            RouterContext {
-                                route: route.clone(),
-                                handler: handler.clone(),
-                                params: m.params.clone(),
-                            }
-                        })
-                    })
+            .signal_ref({
+                move |path| {
+                    if let Some(f) = &self.on_change {
+                        f(path);
+                    }
+
+                    for (route, handler) in &self.routes {
+                        if let Some(mtch) = route.matches(path, self.path_offset) {
+                            return Some(InternalMatch((mtch, handler.clone())));
+                        }
+                    }
+
+                    None
                 }
             })
-            .dedupe_map(move |c| {
-                c.as_ref().and_then(|c| {
-                    (c.handler)(&HandlerContext {
-                        params: c.params.clone(),
-                        remainder: remainder.clone(),
-                    })
-                })
+            .dedupe_map({
+                move |mtch| {
+                    if let Some(InternalMatch((m, h))) = mtch {
+                        return (h)(&router, m);
+                    }
+
+                    if let Some(path) = &router.default {
+                        router.goto(path);
+                    }
+
+                    None
+                }
             })
     }
 }
 
-// thread_local! {
-//     static INSTANCE: Router = Router::new(
-//         &web_sys::window()
-//             .and_then(|w| w.location().pathname().ok())
-//             .unwrap_or_default()
-//     );
-// }
+pub struct ReadOnlyRouter {
+    path: Mutable<Path>,
+    path_offset: usize,
+    default: Option<String>,
+}
 
-// pub fn router(routes: &[(&str, fn() -> Dom)]) -> impl Signal<Item = Option<Dom>> {
-//     let routes: Vec<Route> = routes
-//         .iter()
-//         .map(|&(path, resolver)| Route::new(path, resolver))
-//         .collect();
+impl ReadOnlyRouter {
+    pub fn goto(&self, target: &str) {
+        // Only treat the target as absolute path if explicitly asked to do so
+        let target = if !target.starts_with(['/', '.']) {
+            String::from("./") + target
+        } else {
+            target.to_string()
+        };
 
-//     Router::signal_path()
-//         .map(move |path| {
-//             routes.iter().find_map(|r| {
-//                 r.matches(&path).map(|m| {
-//                     debug!(?m);
-//                     Router::set_remainder(m.remainder());
-//                     m
-//                 })
-//             })
-//         })
-//         .dedupe_cloned()
-//         .map(|m: Option<RouteMatch>| m.map(|m| m.route().resolve()))
-// }
+        let new = match Path::new(&target) {
+            path @ Path::Absolute(_) => path,
+            path @ Path::Relative(_) => {
+                Path::Absolute(
+                    self.path
+                        .get_cloned()
+                        .into_segments()
+                        .take(self.path_offset)
+                        .collect(),
+                ) + path
+            }
+        };
 
-// pub fn goto(path: &str) {
-//     INSTANCE.with(|r| Router::goto(r, path));
-// }
+        self.path.set_neq(new);
+    }
 
-// struct Router {
-//     current_path: Mutable<Vec<String>>,
-//     remainder: RefCell<Vec<String>>,
-// }
+    pub fn signal_active(&self, path: &str) -> impl Signal<Item = bool> {
+        self.path.signal_cloned().map({
+            let route = Path::new(path);
+            let offset = self.path_offset;
 
-// impl Router {
-//     fn new(path: &str) -> Self {
-//         let segments = split_path(path);
+            move |path| route.matches(&path, offset).is_some()
+        })
+    }
+}
 
-//         Self {
-//             current_path: Mutable::new(segments.clone()),
-//             remainder: RefCell::new(segments),
-//         }
-//     }
-
-//     fn goto(&self, path: &str) {
-//         let segments = split_path(path);
-
-//         self.remainder.replace(segments.clone());
-//         self.current_path.replace(segments);
-
-//         web_sys::window()
-//             .unwrap()
-//             .history()
-//             .unwrap()
-//             .push_state_with_url(&JsValue::NULL, "", Some(path))
-//             .unwrap();
-//     }
-
-//     fn signal_path() -> impl Signal<Item = Vec<String>> {
-//         INSTANCE.with(|r| r.current_path.signal_cloned().map(|_| Router::remainder()))
-//     }
-
-//     fn remainder() -> Vec<String> {
-//         INSTANCE.with(|r| r.remainder.borrow().clone())
-//     }
-
-//     fn set_remainder(remainder: Vec<String>) {
-//         INSTANCE.with(|r| r.remainder.replace(remainder));
-//     }
-// }
+pub fn active_router_link<B: AsRef<EventTarget> + AsRef<Element>>(
+    router: &Router,
+    target: &str,
+) -> impl FnOnce(dominator::DomBuilder<B>) -> dominator::DomBuilder<B> {
+    let router = router.readonly();
+    let target = target.to_string();
+    move |dom| {
+        dom.class_signal("active", router.signal_active(&target))
+            .event(move |_: events::Click| router.goto(&target))
+    }
+}

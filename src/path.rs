@@ -1,106 +1,95 @@
-use std::collections::HashMap;
-use std::ops::Add;
-use std::str::FromStr;
+use std::{collections::HashMap, ops::Add};
 
-#[derive(Debug)]
-pub enum PathError {}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Path {
-    segments: Vec<String>,
-    is_absolute: bool,
+#[derive(Clone, Debug, PartialEq)]
+pub enum Path {
+    Absolute(Vec<String>),
+    Relative(Vec<String>),
 }
 
 impl Default for Path {
     fn default() -> Self {
-        Self {
-            segments: Default::default(),
-            is_absolute: true,
-        }
-    }
-}
-
-impl ToString for Path {
-    fn to_string(&self) -> String {
-        if self.is_absolute {
-            String::from("/") + &self.segments.join("/")
-        } else {
-            self.segments.join("/")
-        }
-    }
-}
-
-impl FromStr for Path {
-    type Err = PathError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Parser::parse_path(s)
+        Self::Absolute(Vec::new())
     }
 }
 
 impl Path {
-    pub fn segments(&self) -> &[String] {
-        &self.segments
-    }
-
-    pub fn is_absolute(&self) -> bool {
-        self.is_absolute
-    }
-
-    pub fn is_relative(&self) -> bool {
-        !self.is_absolute
-    }
-
-    fn canonicalized(mut self) -> Self {
-        // TODO: Enable relative paths too
-        if self.is_relative() {
-            return self;
+    pub fn new(path: &str) -> Self {
+        if path.starts_with('.') {
+            Self::Relative(path.split('/').map(str::to_string).collect())
+        } else {
+            Self::Absolute(path.split('/').map(str::to_string).collect())
         }
+        .canonicalize()
+    }
 
-        self.segments = self.segments.into_iter().fold(vec![], |mut acc, seg| {
+    pub fn segments(&self) -> impl Iterator<Item = &String> {
+        match self {
+            Self::Relative(p) => p.iter(),
+            Self::Absolute(p) => p.iter(),
+        }
+    }
+
+    pub fn into_segments(self) -> impl Iterator<Item = String> {
+        match self {
+            Self::Relative(p) => p.into_iter(),
+            Self::Absolute(p) => p.into_iter(),
+        }
+    }
+
+    fn canonicalize(self) -> Self {
+        let segments = match self {
+            s @ Path::Relative(_) => return s,
+            Path::Absolute(p) => p,
+        };
+
+        Self::Absolute(segments.into_iter().fold(Vec::new(), |mut acc, seg| {
             match seg.as_str() {
-                "." => (),
+                "." | "" => (),
                 ".." => {
                     acc.pop();
                 }
-                s => {
-                    acc.push(s.to_string());
+                _ => {
+                    acc.push(seg);
                 }
             }
 
             acc
-        });
+        }))
+    }
 
-        self
+    fn into_inner(self) -> Vec<String> {
+        match self {
+            Self::Relative(p) => p,
+            Self::Absolute(p) => p,
+        }
     }
 }
 
 impl Add for Path {
     type Output = Path;
 
-    fn add(mut self, rhs: Self) -> Self::Output {
-        for seg in rhs.segments {
-            match seg.as_str() {
-                ".." => {
-                    self.segments.pop();
-                }
-                s => {
-                    self.segments.push(s.to_string());
-                }
-            };
+    fn add(self, rhs: Self) -> Self::Output {
+        match self {
+            Self::Absolute(mut p) => Self::Absolute({
+                p.append(&mut rhs.into_inner());
+                p
+            }),
+            Self::Relative(mut p) => Self::Relative({
+                p.append(&mut rhs.into_inner());
+                p
+            }),
         }
-
-        self
+        .canonicalize()
     }
 }
 
-#[derive(Debug, PartialEq, Clone)]
-enum RouteSegment {
-    Static(String),
-    Param(String),
-    Continue,
-    SegmentWildcard,
-    FullWildcard,
+impl ToString for Path {
+    fn to_string(&self) -> String {
+        match self {
+            Self::Absolute(p) => String::from("/") + &p.join("/"),
+            Self::Relative(p) => String::from("./") + &p.join("/"),
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -110,292 +99,53 @@ impl Params {
     pub fn get(&self, k: &str) -> Option<&String> {
         self.0.get(k)
     }
-}
 
-#[derive(Default)]
-pub struct RouteMatch {
-    pub remainder: Path,
-    pub params: Params,
-}
-
-#[derive(Debug, PartialEq, Clone)]
-pub struct Route(Vec<RouteSegment>);
-
-impl FromStr for Route {
-    type Err = PathError;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Parser::parse_route(s)
+    fn insert(&mut self, k: &str, v: &str) {
+        self.0.insert(k.to_owned(), v.to_owned());
     }
 }
 
-impl Route {
-    pub fn matches(&self, path: &Path) -> Option<RouteMatch> {
-        let mut s = self.0.iter();
-        let mut p = path.segments.iter();
-        let mut mtch = RouteMatch::default();
+#[derive(Debug, Default, Clone)]
+pub struct PathMatch {
+    pub params: Params,
+    pub segments: Vec<String>,
+}
+
+impl PartialEq for PathMatch {
+    fn eq(&self, other: &Self) -> bool {
+        self.segments == other.segments
+    }
+}
+
+impl Path {
+    pub fn matches(&self, other: &Path, offset: usize) -> Option<PathMatch> {
+        let (mut r, mut p) = (self.segments(), other.segments().skip(offset));
+        let mut mtch = PathMatch::default();
 
         loop {
-            match (s.next(), p.next()) {
-                (Some(RouteSegment::FullWildcard), _) => {
+            match (r.next(), p.next()) {
+                (Some(r), Some(p)) if r.starts_with(':') => {
+                    mtch.params.insert(r.strip_prefix(':').unwrap(), p);
+                    mtch.segments.push(p.to_owned());
+                }
+                (Some(r), Some(p)) if r == p => {
+                    mtch.segments.push(p.to_owned());
+                }
+                (None, _) => {
                     return Some(mtch);
-                }
-                (Some(RouteSegment::SegmentWildcard), Some(_)) => {
-                    continue;
-                }
-                (Some(RouteSegment::Static(seg)), Some(s)) if seg == s => {
-                    continue;
-                }
-                (Some(RouteSegment::Param(p)), Some(s)) => {
-                    mtch.params.0.insert(p.to_string(), s.to_string());
-                }
-                (Some(RouteSegment::Continue), Some(s)) => {
-                    mtch.remainder.segments.push(s.to_string());
-                }
-                (Some(RouteSegment::Continue), None) => {
-                    break;
-                }
-                (None, Some(s)) if !mtch.remainder.segments.is_empty() => {
-                    mtch.remainder.segments.push(s.to_string());
-                }
-                (None, None) => {
-                    break;
                 }
                 _ => {
                     return None;
                 }
             }
         }
-
-        Some(mtch)
-    }
-}
-
-struct Parser<'p> {
-    input: &'p str,
-    index: usize,
-}
-
-impl<'p> Parser<'p> {
-    pub fn parse_route(path: &'p str) -> Result<Route, PathError> {
-        let mut result = vec![];
-
-        let mut p = Self {
-            input: path,
-            index: 0,
-        };
-
-        p.skip_while(char::is_whitespace);
-
-        loop {
-            if p.peek() == '/' {
-                p.consume_char();
-            }
-
-            if p.eol() {
-                break;
-            }
-
-            match p.parse_segment() {
-                Some(RouteSegment::Continue) => {
-                    result.push(RouteSegment::Continue);
-                    break;
-                }
-                Some(seg) => result.push(seg),
-                None => (),
-            }
-        }
-
-        Ok(Route(result))
-    }
-
-    pub fn parse_path(path: &'p str) -> Result<Path, PathError> {
-        let mut segments = vec![];
-
-        let mut p = Self {
-            input: path,
-            index: 0,
-        };
-
-        p.skip_while(char::is_whitespace);
-
-        let is_absolute = p.peek() != '.';
-
-        loop {
-            if p.peek() == '/' {
-                p.consume_char();
-            }
-
-            if p.eol() {
-                break;
-            }
-
-            if p.peek() == '.' {
-                match p.consume_while(|c| c == '.') {
-                    s if s == ".." => segments.push(s),
-                    s if s == "." => (),
-                    _ => todo!(),
-                }
-            }
-
-            match p.parse_static() {
-                Some(RouteSegment::Static(s)) => segments.push(s),
-                _ => (),
-            };
-        }
-
-        Ok(Path {
-            segments,
-            is_absolute,
-        }
-        .canonicalized())
-    }
-
-    fn parse_segment(&mut self) -> Option<RouteSegment> {
-        match self.peek() {
-            '{' => self.parse_param(),
-            '.' => self.parse_continue(),
-            '*' => self.parse_wildcard(),
-            _ => self.parse_static(),
-        }
-    }
-
-    fn parse_static(&mut self) -> Option<RouteSegment> {
-        match self.consume_while(|c| c != '/').trim() {
-            s if s.is_empty() => None,
-            s => Some(RouteSegment::Static(s.to_string())),
-        }
-    }
-
-    fn parse_param(&mut self) -> Option<RouteSegment> {
-        self.consume_char();
-
-        match self.consume_while(|c| c != '}' && c != '/') {
-            s if s.is_empty() => None,
-            s => {
-                self.consume_char();
-                Some(RouteSegment::Param(s))
-            }
-        }
-    }
-
-    fn parse_continue(&mut self) -> Option<RouteSegment> {
-        match self.consume_while(|c| c == '.').as_str() {
-            "..." => Some(RouteSegment::Continue),
-            _ => None,
-        }
-    }
-
-    fn parse_wildcard(&mut self) -> Option<RouteSegment> {
-        match self.consume_while(|c| c == '*').as_str() {
-            "*" => Some(RouteSegment::SegmentWildcard),
-            "**" => Some(RouteSegment::FullWildcard),
-            _ => None,
-        }
-    }
-
-    fn consume_while<F>(&mut self, cond: F) -> String
-    where
-        F: Fn(char) -> bool,
-    {
-        let mut result = String::new();
-
-        while !self.eol() && cond(self.peek()) {
-            result.push(self.consume_char());
-        }
-
-        result
-    }
-
-    fn skip_while<F>(&mut self, cond: F)
-    where
-        F: Fn(char) -> bool,
-    {
-        while !self.eol() && cond(self.peek()) {
-            self.index += 1;
-        }
-    }
-
-    fn consume_char(&mut self) -> char {
-        self.index += 1;
-        self.input.chars().nth(self.index - 1).unwrap_or_default()
-    }
-
-    fn eol(&self) -> bool {
-        self.index >= self.input.len()
-    }
-
-    fn peek(&self) -> char {
-        self.input.chars().nth(self.index).unwrap_or_default()
     }
 }
 
 #[test]
-fn test_route_parser() {
-    use RouteSegment::*;
-
-    assert_eq!(Route::from_str("").unwrap(), Route(vec![]));
-    assert_eq!(Route::from_str("/").unwrap(), Route(vec![]));
-    assert_eq!(Route::from_str("//").unwrap(), Route(vec![]));
-
+fn test() {
     assert_eq!(
-        Route::from_str("foo//bar/{id}///...").unwrap(),
-        Route(vec![
-            Static("foo".to_string()),
-            Static("bar".to_string()),
-            Param("id".to_string()),
-            Continue,
-        ]),
+        String::from("/foo/bar/1/10"),
+        (Path::new("foo///bar/1/2/3") + Path::new("././../../10")).to_string()
     );
-}
-
-#[cfg(test)]
-macro_rules! assert_path {
-    ($path: literal, $expected: expr) => {
-        let rel = $path.starts_with(".");
-        let p = Path::from_str($path).unwrap();
-        let e: &[&str] = $expected;
-        assert!(p.is_absolute() == !rel);
-        assert!(p.segments.iter().eq(e.iter()));
-    };
-
-    ($a: literal + $b: literal, $expected: expr) => {
-        let rel = $a.starts_with(".");
-        let p = dbg!(Path::from_str($a).unwrap() + Path::from_str($b).unwrap());
-        let e: &[&str] = $expected;
-        assert!(p.is_absolute() == !rel);
-        assert!(p.segments.iter().eq(e.iter()));
-    };
-}
-
-#[test]
-fn test_path_parser() {
-    assert_path!("", &[]);
-    assert_path!("/", &[]);
-    assert_path!("foobar", &["foobar"]);
-    assert_path!("/foo/bar", &["foo", "bar"]);
-
-    assert_path!(".", &[]);
-    assert_path!("..", &[".."]);
-    assert_path!("./../.", &[".."]);
-}
-
-#[test]
-fn test_canonicalization() {
-    assert_path!("/bla/../../../goo", &["goo"]);
-
-    // TODO: Make it work!
-    // assert_path!("./bla/../../../goo", &["..", "..", "goo"]);
-}
-
-#[test]
-fn test_path_concatenation() {
-    assert_path!("/foo/bar" + "goo", &["foo", "bar", "goo"]);
-    assert_path!("/foo/bar" + "../goo", &["foo", "goo"]);
-    assert_path!("/foo/bar" + "/bla/../../goo", &["foo", "bar", "goo"]);
-    assert_path!("../foo" + "./bar", &["..", "foo", "bar"]);
-    assert_path!("../foo" + "../bar", &["..", "bar"]);
-
-    // TODO: Make it work!
-    // assert_path!("../foo" + "../../bar", &["..", "..", "bar"]);
 }

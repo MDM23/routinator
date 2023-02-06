@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <style>
+      body {
+        max-width: 1000px;
+        margin: 1rem auto;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: 1fr 3fr;
+        gap: 1rem;
+      }
+
+      main > nav,section {
+        border: 1px solid;
+      }
+
+      main > nav {
+        display: flex;
+        flex-direction: column;
+      }
+
+      main > nav > a {
+        padding: 0.25rem 1rem;
+      }
+
+      a.active {
+        color: green;
+      }
+    </style>
+  </head>
+  <body></body>
+</html>

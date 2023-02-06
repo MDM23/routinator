@@ -164,14 +164,43 @@ impl ReadOnlyRouter {
     }
 }
 
-pub fn active_router_link<B: AsRef<EventTarget> + AsRef<Element>>(
-    router: &Router,
+impl From<&Router> for ReadOnlyRouter {
+    fn from(value: &Router) -> Self {
+        value.readonly()
+    }
+}
+
+impl From<&ReadOnlyRouter> for ReadOnlyRouter {
+    fn from(value: &ReadOnlyRouter) -> Self {
+        value.clone()
+    }
+}
+
+pub fn active_router_link<B, R>(
+    router: R,
     target: &str,
-) -> impl FnOnce(dominator::DomBuilder<B>) -> dominator::DomBuilder<B> {
-    let router = router.readonly();
+) -> impl FnOnce(dominator::DomBuilder<B>) -> dominator::DomBuilder<B>
+where
+    B: AsRef<EventTarget> + AsRef<Element>,
+    R: Into<ReadOnlyRouter>,
+{
+    let router: ReadOnlyRouter = router.into();
     let target = target.to_string();
     move |dom| {
         dom.class_signal("active", router.signal_active(&target))
             .event(move |_: events::Click| router.goto(&target))
     }
+}
+
+pub fn router_link<B, R>(
+    router: R,
+    target: &str,
+) -> impl FnOnce(dominator::DomBuilder<B>) -> dominator::DomBuilder<B>
+where
+    B: AsRef<EventTarget> + AsRef<Element>,
+    R: Into<ReadOnlyRouter>,
+{
+    let router: ReadOnlyRouter = router.into();
+    let target = target.to_string();
+    move |dom| dom.event(move |_: events::Click| router.goto(&target))
 }

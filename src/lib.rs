@@ -7,6 +7,8 @@ use path::{Path, PathMatch};
 use wasm_bindgen::{JsValue, UnwrapThrowExt};
 use web_sys::{Element, EventTarget};
 
+pub use path::Params;
+
 mod handler;
 mod path;
 
@@ -120,6 +122,7 @@ impl Router {
     }
 }
 
+#[derive(Clone)]
 pub struct ReadOnlyRouter {
     path: Mutable<Path>,
     path_offset: usize,

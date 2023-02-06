@@ -77,6 +77,12 @@ impl Extract for Router {
     }
 }
 
+impl Extract for ReadOnlyRouter {
+    fn extract(router: &ReadOnlyRouter, _: &PathMatch) -> Self {
+        router.clone()
+    }
+}
+
 impl Extract for () {
     fn extract(_: &ReadOnlyRouter, _: &PathMatch) -> Self {}
 }

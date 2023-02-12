@@ -10,6 +10,7 @@ mod path;
 mod route;
 
 pub use route::ToRoute;
+use wasm_bindgen::{JsValue, UnwrapThrowExt};
 use web_sys::{Element, EventTarget};
 
 #[derive(Debug, Default, Clone, PartialEq)]
@@ -41,6 +42,7 @@ pub struct Router {
     path: Mutable<Path>,
     path_offset: usize,
     matched_segments: Rc<RefCell<usize>>,
+    on_change: Option<Box<dyn Fn(&Path)>>,
     is_cloned: bool,
 }
 
@@ -50,6 +52,7 @@ impl Clone for Router {
             path: self.path.clone(),
             path_offset: self.path_offset.clone(),
             matched_segments: self.matched_segments.clone(),
+            on_change: None,
             is_cloned: true,
         }
     }
@@ -61,19 +64,17 @@ impl Router {
             path: Mutable::new(Path::new(initial_path)),
             path_offset: 0,
             matched_segments: Rc::new(RefCell::new(0)),
+            on_change: None,
             is_cloned: false,
         }
     }
 
     pub fn with_browser_url() -> Self {
         Router {
-            path: Mutable::new(Path::new(
-                &web_sys::window()
-                    .and_then(|w| w.location().pathname().ok())
-                    .unwrap_or_default(),
-            )),
+            path: Mutable::new(Path::new(&get_current_url())),
             path_offset: 0,
             matched_segments: Rc::new(RefCell::new(0)),
+            on_change: Some(Box::new(|p| set_current_url(&p.to_string()))),
             is_cloned: false,
         }
     }
@@ -107,6 +108,7 @@ impl Router {
             path: self.path.clone(),
             path_offset: *self.matched_segments.borrow(),
             matched_segments: Rc::new(RefCell::new(0)),
+            on_change: None,
             is_cloned: false,
         }
     }
@@ -156,6 +158,11 @@ impl Router {
                 for r in &routes {
                     if let Some((m, p)) = r.matches(path, self.path_offset) {
                         router.matched_segments.replace(m);
+
+                        if let Some(f) = &self.on_change {
+                            f(path);
+                        }
+
                         return Some(RouteContext {
                             route: r.clone(),
                             router: router.clone(),
@@ -168,4 +175,19 @@ impl Router {
             })
             .dedupe_map(|ctx| ctx.as_ref().and_then(|ctx| (ctx.route.handler)(ctx)))
     }
+}
+
+fn get_current_url() -> String {
+    web_sys::window()
+        .and_then(|w| w.location().pathname().ok())
+        .unwrap_or_default()
+}
+
+fn set_current_url(path: &str) {
+    web_sys::window()
+        .unwrap()
+        .history()
+        .unwrap()
+        .push_state_with_url(&JsValue::NULL, "", Some(&path.to_string()))
+        .unwrap_throw();
 }

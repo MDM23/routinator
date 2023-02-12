@@ -94,7 +94,7 @@ impl Router {
                     self.path
                         .get_cloned()
                         .into_segments()
-                        .take(self.path_offset)
+                        .take(self.path_offset + self.matched_segments.borrow().saturating_sub(1))
                         .collect(),
                 ) + path
             }

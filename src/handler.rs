@@ -1,9 +1,8 @@
+use std::{cell::RefCell, rc::Rc};
+
 use dominator::Dom;
 
-use crate::{
-    path::{Params, PathMatch},
-    ReadOnlyRouter, Router,
-};
+use crate::{route::Route, Params, RouteContext, Router};
 
 pub trait Handler<Args> {
     fn call(&self, args: Args) -> Option<Dom>;
@@ -56,45 +55,33 @@ where
 }
 
 pub trait Extract {
-    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self;
+    fn extract(router: &RouteContext) -> Self;
 }
 
 impl Extract for Params {
-    fn extract(_: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
-        mtch.params.clone()
+    fn extract(ctx: &RouteContext) -> Self {
+        ctx.params.clone()
     }
 }
 
 impl Extract for Router {
-    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
-        Router {
-            path: router.path.clone(),
-            path_offset: mtch.segments.len(),
-            routes: Vec::new(),
-            default: None,
-            on_change: None,
-        }
-    }
-}
-
-impl Extract for ReadOnlyRouter {
-    fn extract(router: &ReadOnlyRouter, _: &PathMatch) -> Self {
-        router.clone()
+    fn extract(ctx: &RouteContext) -> Self {
+        ctx.router.clone()
     }
 }
 
 impl Extract for () {
-    fn extract(_: &ReadOnlyRouter, _: &PathMatch) -> Self {}
+    fn extract(_: &RouteContext) -> Self {}
 }
 
 impl<A: Extract> Extract for (A,) {
-    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
-        (A::extract(router, mtch),)
+    fn extract(ctx: &RouteContext) -> Self {
+        (A::extract(ctx),)
     }
 }
 
 impl<A: Extract, B: Extract> Extract for (A, B) {
-    fn extract(router: &ReadOnlyRouter, mtch: &PathMatch) -> Self {
-        (A::extract(router, mtch), B::extract(router, mtch))
+    fn extract(ctx: &RouteContext) -> Self {
+        (A::extract(ctx), B::extract(ctx))
     }
 }

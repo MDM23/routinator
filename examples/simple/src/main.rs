@@ -1,5 +1,5 @@
 use dominator::{html, Dom};
-use routinator::{active_router_link, ReadOnlyRouter, Router};
+use routinator::{Router, ToRoute};
 
 fn main() {
     console_error_panic_hook::set_once();
@@ -8,26 +8,27 @@ fn main() {
 }
 
 fn view() -> Dom {
-    let mut router = Router::with_browser_url();
-    router.add_route("/home", home);
-    router.add_route("/elements", elements);
-    router.set_default("/home");
+    let router = Router::with_browser_url();
 
     html!("main", {
         .child(html!("nav", {
             .children(&mut [
                 html!("a", {
                     .text("Home")
-                    .apply(active_router_link(&router, "home"))
+                    .apply(router.link_active("home"))
                 }),
                 html!("a", {
                     .text("Elements")
-                    .apply(active_router_link(&router, "elements"))
+                    .apply(router.link_active("elements"))
                 }),
             ])
         }))
         .child(html!("section", {
-            .child_signal(router.mount())
+            .child_signal(router.mount([
+                "/home"     .to(home),
+                "/elements" .to(elements),
+                "/"         .redirect("home")
+            ]))
         }))
     })
 }
@@ -36,27 +37,30 @@ fn home() -> Dom {
     html!("div", { .text("Home") })
 }
 
-fn elements(mut router: Router) -> Dom {
-    router.add_route("/details", || html!("p", { .text("Details") }));
-    router.add_route("/relations", || html!("p", { .text("Relations") }));
-    router.add_route("/", || html!("p", { .text("List") }));
+fn elements(router: Router) -> Dom {
+    let router = router.nest();
 
     html!("div", {
         .text("Elements")
+        .child(html!("input", { .attr("type", "text") }))
         .child(html!("p", {
             .children(&mut [
                 html!("a", {
                     .text("Details")
-                    .apply(active_router_link(&router, "details"))
+                    .apply(router.link_active("details"))
                 }),
                 html!("a", {
                     .text("Relations")
-                    .apply(active_router_link(&router, "relations"))
+                    .apply(router.link_active("relations"))
                 }),
             ])
         }))
         .child(html!("section", {
-            .child_signal(router.mount())
+            .child_signal(router.mount([
+                "/details"   .to(|| html!("p", { .text("Details") })),
+                "/relations" .to(|| html!("p", { .text("Relations") })),
+                "/list"      .to(|| html!("p", { .text("List") })),
+            ]))
         }))
     })
 }

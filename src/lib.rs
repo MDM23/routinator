@@ -1,135 +1,83 @@
-use std::rc::Rc;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use dominator::{events, Dom};
+use dominator::{events, Dom, DomBuilder};
 use futures_signals::signal::{Mutable, Signal, SignalExt};
-use handler::{Extract, Handler};
-use path::{Path, PathMatch};
-use wasm_bindgen::{JsValue, UnwrapThrowExt};
-use web_sys::{Element, EventTarget};
-
-pub use path::Params;
+use path::Path;
+use route::Route;
 
 mod handler;
 mod path;
+mod route;
 
-pub type RouteHandler = Rc<dyn Fn(&ReadOnlyRouter, &PathMatch) -> Option<Dom>>;
+pub use route::ToRoute;
+use web_sys::{Element, EventTarget};
 
-#[derive(Default)]
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct Params(HashMap<String, String>);
+
+impl Params {
+    pub fn get(&self, k: &str) -> Option<&String> {
+        self.0.get(k)
+    }
+
+    fn insert(&mut self, k: &str, v: &str) {
+        self.0.insert(k.to_owned(), v.to_owned());
+    }
+}
+
+pub struct RouteContext {
+    route: Route,
+    router: Router,
+    params: Params,
+}
+
+impl PartialEq for RouteContext {
+    fn eq(&self, other: &Self) -> bool {
+        self.route == other.route
+    }
+}
+
 pub struct Router {
     path: Mutable<Path>,
     path_offset: usize,
-    routes: Vec<(Path, RouteHandler)>,
-    default: Option<String>,
-    on_change: Option<Box<dyn Fn(&Path)>>,
+    matched_segments: Rc<RefCell<usize>>,
+    is_cloned: bool,
+}
+
+impl Clone for Router {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            path_offset: self.path_offset.clone(),
+            matched_segments: self.matched_segments.clone(),
+            is_cloned: true,
+        }
+    }
 }
 
 impl Router {
-    pub fn new() -> Self {
-        Default::default()
+    pub fn new(initial_path: &str) -> Self {
+        Router {
+            path: Mutable::new(Path::new(initial_path)),
+            path_offset: 0,
+            matched_segments: Rc::new(RefCell::new(0)),
+            is_cloned: false,
+        }
     }
 
     pub fn with_browser_url() -> Self {
-        Self {
-            on_change: Some(Box::new(|p| {
-                web_sys::window()
-                    .unwrap()
-                    .history()
-                    .unwrap()
-                    .push_state_with_url(&JsValue::NULL, "", Some(&p.to_string()))
-                    .unwrap_throw();
-            })),
+        Router {
             path: Mutable::new(Path::new(
                 &web_sys::window()
                     .and_then(|w| w.location().pathname().ok())
                     .unwrap_or_default(),
             )),
-            ..Default::default()
+            path_offset: 0,
+            matched_segments: Rc::new(RefCell::new(0)),
+            is_cloned: false,
         }
     }
 
-    pub fn readonly(&self) -> ReadOnlyRouter {
-        ReadOnlyRouter {
-            path: self.path.clone(),
-            path_offset: self.path_offset,
-            default: self.default.clone(),
-        }
-    }
-
-    pub fn add_route<H, Args>(&mut self, route: &str, handler: H)
-    where
-        H: Handler<Args> + 'static,
-        Args: Extract,
-    {
-        self.routes.push((
-            Path::new(route),
-            Rc::new(move |router, mtch| handler.call(Args::extract(router, mtch))),
-        ));
-    }
-
-    pub fn set_default(&mut self, path: &str) {
-        self.default.replace(path.to_string());
-    }
-
-    pub fn signal_active(&self, path: &str) -> impl Signal<Item = bool> {
-        self.path.signal_cloned().map({
-            let route = Path::new(path);
-            let offset = self.path_offset;
-
-            move |path| route.matches(&path, offset).is_some()
-        })
-    }
-
-    pub fn mount(self) -> impl Signal<Item = Option<Dom>> {
-        struct InternalMatch((PathMatch, RouteHandler));
-
-        impl PartialEq for InternalMatch {
-            fn eq(&self, other: &Self) -> bool {
-                self.0 .0 == other.0 .0
-            }
-        }
-
-        let router = self.readonly();
-
-        self.path
-            .signal_ref({
-                move |path| {
-                    if let Some(f) = &self.on_change {
-                        f(path);
-                    }
-
-                    for (route, handler) in &self.routes {
-                        if let Some(mtch) = route.matches(path, self.path_offset) {
-                            return Some(InternalMatch((mtch, handler.clone())));
-                        }
-                    }
-
-                    None
-                }
-            })
-            .dedupe_map({
-                move |mtch| {
-                    if let Some(InternalMatch((m, h))) = mtch {
-                        return (h)(&router, m);
-                    }
-
-                    if let Some(path) = &router.default {
-                        router.goto(path);
-                    }
-
-                    None
-                }
-            })
-    }
-}
-
-#[derive(Clone)]
-pub struct ReadOnlyRouter {
-    path: Mutable<Path>,
-    path_offset: usize,
-    default: Option<String>,
-}
-
-impl ReadOnlyRouter {
     pub fn goto(&self, target: &str) {
         // Only treat the target as absolute path if explicitly asked to do so
         let target = if !target.starts_with(['/', '.']) {
@@ -154,53 +102,70 @@ impl ReadOnlyRouter {
         self.path.set_neq(new);
     }
 
+    pub fn nest(&self) -> Router {
+        Router {
+            path: self.path.clone(),
+            path_offset: *self.matched_segments.borrow(),
+            matched_segments: Rc::new(RefCell::new(0)),
+            is_cloned: false,
+        }
+    }
+
     pub fn signal_active(&self, path: &str) -> impl Signal<Item = bool> {
         self.path.signal_cloned().map({
             let route = Path::new(path);
             let offset = self.path_offset;
 
-            move |path| route.matches(&path, offset).is_some()
+            move |path| route.matches(&path, offset)
         })
     }
-}
 
-impl From<&Router> for ReadOnlyRouter {
-    fn from(value: &Router) -> Self {
-        value.readonly()
+    pub fn link_active<B>(&self, target: &str) -> impl FnOnce(DomBuilder<B>) -> DomBuilder<B>
+    where
+        B: AsRef<EventTarget> + AsRef<Element>,
+    {
+        let target = target.to_string();
+        let router = self.clone();
+        move |dom| {
+            dom.class_signal("active", router.signal_active(&target))
+                .event(move |_: events::Click| router.goto(&target))
+        }
     }
-}
 
-impl From<&ReadOnlyRouter> for ReadOnlyRouter {
-    fn from(value: &ReadOnlyRouter) -> Self {
-        value.clone()
+    pub fn link<B>(&self, target: &str) -> impl FnOnce(DomBuilder<B>) -> DomBuilder<B>
+    where
+        B: AsRef<EventTarget> + AsRef<Element>,
+    {
+        let target = target.to_string();
+        let router = self.clone();
+        move |dom| dom.event(move |_: events::Click| router.goto(&target))
     }
-}
 
-pub fn active_router_link<B, R>(
-    router: R,
-    target: &str,
-) -> impl FnOnce(dominator::DomBuilder<B>) -> dominator::DomBuilder<B>
-where
-    B: AsRef<EventTarget> + AsRef<Element>,
-    R: Into<ReadOnlyRouter>,
-{
-    let router: ReadOnlyRouter = router.into();
-    let target = target.to_string();
-    move |dom| {
-        dom.class_signal("active", router.signal_active(&target))
-            .event(move |_: events::Click| router.goto(&target))
+    pub fn mount<const N: usize>(
+        self,
+        routes: [Route; N],
+    ) -> impl Signal<Item = Option<Dom>> + 'static {
+        if self.is_cloned {
+            panic!("Cannot mount cloned router! Please use nest() or create a new instance.");
+        }
+
+        let router = self.clone();
+
+        self.path
+            .signal_ref(move |path| {
+                for r in &routes {
+                    if let Some((m, p)) = r.matches(path, self.path_offset) {
+                        router.matched_segments.replace(m);
+                        return Some(RouteContext {
+                            route: r.clone(),
+                            router: router.clone(),
+                            params: p,
+                        });
+                    }
+                }
+
+                None
+            })
+            .dedupe_map(|ctx| ctx.as_ref().and_then(|ctx| (ctx.route.handler)(ctx)))
     }
-}
-
-pub fn router_link<B, R>(
-    router: R,
-    target: &str,
-) -> impl FnOnce(dominator::DomBuilder<B>) -> dominator::DomBuilder<B>
-where
-    B: AsRef<EventTarget> + AsRef<Element>,
-    R: Into<ReadOnlyRouter>,
-{
-    let router: ReadOnlyRouter = router.into();
-    let target = target.to_string();
-    move |dom| dom.event(move |_: events::Click| router.goto(&target))
 }

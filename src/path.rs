@@ -36,6 +36,27 @@ impl Path {
         }
     }
 
+    pub fn matches(&self, path: &Path, skip_segments: usize) -> bool {
+        let (mut r, mut p) = (self.segments(), path.segments().skip(skip_segments));
+
+        loop {
+            match (r.next(), p.next()) {
+                (Some(r), Some(p)) if r.starts_with(':') => {
+                    continue;
+                }
+                (Some(r), Some(p)) if r == p => {
+                    continue;
+                }
+                (None, _) => {
+                    return true;
+                }
+                _ => {
+                    return false;
+                }
+            }
+        }
+    }
+
     fn canonicalize(self) -> Self {
         let segments = match self {
             s @ Path::Relative(_) => return s,
@@ -92,55 +113,30 @@ impl ToString for Path {
     }
 }
 
-#[derive(Debug, Default, Clone, PartialEq)]
-pub struct Params(HashMap<String, String>);
+// impl Path {
+//     pub fn matches(&self, other: &Path, offset: usize) -> Option<PathMatch> {
+//         let (mut r, mut p) = (self.segments(), other.segments().skip(offset));
+//         let mut mtch = PathMatch::default();
 
-impl Params {
-    pub fn get(&self, k: &str) -> Option<&String> {
-        self.0.get(k)
-    }
-
-    fn insert(&mut self, k: &str, v: &str) {
-        self.0.insert(k.to_owned(), v.to_owned());
-    }
-}
-
-#[derive(Debug, Default, Clone)]
-pub struct PathMatch {
-    pub params: Params,
-    pub segments: Vec<String>,
-}
-
-impl PartialEq for PathMatch {
-    fn eq(&self, other: &Self) -> bool {
-        self.segments == other.segments
-    }
-}
-
-impl Path {
-    pub fn matches(&self, other: &Path, offset: usize) -> Option<PathMatch> {
-        let (mut r, mut p) = (self.segments(), other.segments().skip(offset));
-        let mut mtch = PathMatch::default();
-
-        loop {
-            match (r.next(), p.next()) {
-                (Some(r), Some(p)) if r.starts_with(':') => {
-                    mtch.params.insert(r.strip_prefix(':').unwrap(), p);
-                    mtch.segments.push(p.to_owned());
-                }
-                (Some(r), Some(p)) if r == p => {
-                    mtch.segments.push(p.to_owned());
-                }
-                (None, _) => {
-                    return Some(mtch);
-                }
-                _ => {
-                    return None;
-                }
-            }
-        }
-    }
-}
+//         loop {
+//             match (r.next(), p.next()) {
+//                 (Some(r), Some(p)) if r.starts_with(':') => {
+//                     mtch.params.insert(r.strip_prefix(':').unwrap(), p);
+//                     mtch.segments.push(p.to_owned());
+//                 }
+//                 (Some(r), Some(p)) if r == p => {
+//                     mtch.segments.push(p.to_owned());
+//                 }
+//                 (None, _) => {
+//                     return Some(mtch);
+//                 }
+//                 _ => {
+//                     return None;
+//                 }
+//             }
+//         }
+//     }
+// }
 
 #[test]
 fn test() {

@@ -23,13 +23,11 @@ fn view() -> Dom {
                 }),
             ])
         }))
-        .child(html!("section", {
-            .child_signal(router.mount([
-                "/home"     .to(home),
-                "/elements" .to(elements),
-                "/"         .redirect("home")
-            ]))
-        }))
+        .child(router.mount([
+            "/home"     .to(home),
+            "/elements" .to(elements),
+            "/"         .redirect("home")
+        ]))
     })
 }
 
@@ -55,12 +53,10 @@ fn elements(router: Router) -> Dom {
                 }),
             ])
         }))
-        .child(html!("section", {
-            .child_signal(router.mount([
-                "/details"   .to(|| html!("p", { .text("Details") })),
-                "/relations" .to(|| html!("p", { .text("Relations") })),
-                "/list"      .to(|| html!("p", { .text("List") })),
-            ]))
-        }))
+        .child(router.mount([
+            "/details"   .to(|| html!("p", { .text("Details") })),
+            "/relations" .to(|| html!("p", { .text("Relations") })),
+            "/list"      .to(|| html!("p", { .text("List") })),
+        ]))
     })
 }

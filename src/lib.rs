@@ -1,6 +1,6 @@
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
-use dominator::{events, Dom, DomBuilder};
+use dominator::{events, html, Dom, DomBuilder};
 use futures_signals::signal::{Mutable, Signal, SignalExt};
 use path::Path;
 use route::Route;
@@ -143,7 +143,13 @@ impl Router {
         move |dom| dom.event(move |_: events::Click| router.goto(&target))
     }
 
-    pub fn mount<const N: usize>(
+    pub fn mount<const N: usize>(self, routes: [Route; N]) -> Dom {
+        html!("router", {
+            .child_signal(self.mount_signal(routes))
+        })
+    }
+
+    pub fn mount_signal<const N: usize>(
         self,
         routes: [Route; N],
     ) -> impl Signal<Item = Option<Dom>> + 'static {

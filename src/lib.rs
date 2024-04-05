@@ -34,7 +34,7 @@ pub struct RouteContext {
 
 impl PartialEq for RouteContext {
     fn eq(&self, other: &Self) -> bool {
-        self.route == other.route
+        self.route == other.route && self.params == other.params
     }
 }
 

@@ -1,0 +1,14 @@
+[workspace]
+members = ["examples/*"]
+
+[package]
+name = "routinator"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+dominator = "0.5"
+futures-signals = "0.3"
+gloo = "0.11.0"
+tracing = "0.1"
+web-sys = "0.3.77"

@@ -1,12 +1,7 @@
 use dominator::{events, Dom, DomBuilder, EventOptions};
 use futures_signals::signal::{Mutable, Signal, SignalExt};
 use gloo::{events::EventListener, utils::window};
-use std::{
-    cell::RefCell,
-    collections::HashMap,
-    rc::Rc,
-    sync::atomic::{AtomicBool, Ordering},
-};
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
 use web_sys::{wasm_bindgen::JsValue, Element, EventTarget};
 
 use crate::path::{Path, Route};
@@ -66,7 +61,6 @@ where
             context: Default::default(),
             routes: Default::default(),
             default_path: Default::default(),
-            is_root: false,
             popstate: None,
         })
         .into_option_dom()
@@ -96,27 +90,18 @@ impl Context {
     }
 }
 
-static ROOT_INSTANCED: AtomicBool = AtomicBool::new(false);
-
 pub struct Router {
     root: Mutable<Path>,
     parent: Context,
     context: Rc<RefCell<Option<Context>>>,
     routes: Vec<(Route, Box<dyn Fn(&Router) -> Option<Dom>>)>,
     default_path: Option<Path>,
-    is_root: bool,
     #[allow(dead_code)]
     popstate: Option<EventListener>,
 }
 
 impl Router {
     pub fn root() -> Self {
-        if ROOT_INSTANCED.load(Ordering::SeqCst) {
-            panic!("Only one root instance of Router is allowed at a time");
-        }
-
-        ROOT_INSTANCED.store(true, Ordering::SeqCst);
-
         let root = Mutable::new(current_path());
 
         Self {
@@ -125,7 +110,6 @@ impl Router {
             context: Default::default(),
             routes: Default::default(),
             default_path: Default::default(),
-            is_root: true,
             popstate: Some(EventListener::new(&window(), "popstate", move |_| {
                 root.set_neq(current_path());
             })),
@@ -225,14 +209,6 @@ impl Router {
                 .match_path(&p.skip(handle.parent.path.len()))
                 .is_some()
         })
-    }
-}
-
-impl Drop for Router {
-    fn drop(&mut self) {
-        if self.is_root {
-            ROOT_INSTANCED.store(false, Ordering::SeqCst);
-        }
     }
 }
 

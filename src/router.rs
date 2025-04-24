@@ -46,7 +46,7 @@ where
     }
 }
 
-impl<F, R> Handler<&Router> for F
+impl<F, R> Handler<Router> for F
 where
     F: Fn(Router) -> R,
     R: MaybeDom,
@@ -64,6 +64,16 @@ where
             popstate: None,
         })
         .into_option_dom()
+    }
+}
+
+impl<F, R> Handler<&Router> for F
+where
+    F: Fn(&Router) -> R,
+    R: MaybeDom,
+{
+    fn execute(&self, router: &Router) -> Option<Dom> {
+        (self)(router).into_option_dom()
     }
 }
 

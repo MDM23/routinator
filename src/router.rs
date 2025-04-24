@@ -222,6 +222,7 @@ impl Router {
     }
 }
 
+#[derive(Clone)]
 pub struct RouterHandle {
     root: Mutable<Path>,
     parent: Context,
@@ -264,6 +265,37 @@ impl RouterHandle {
             .and_then(|ctx| ctx.params.get(key))
             .or_else(|| self.parent.params.get(key))
             .cloned()
+    }
+
+    pub fn link<B>(&self, path: &str) -> impl FnOnce(DomBuilder<B>) -> DomBuilder<B> + '_
+    where
+        B: AsRef<EventTarget> + AsRef<Element>,
+    {
+        let path = path.to_string();
+        let handle = self.clone();
+
+        // TODO: Only set href for actual <a> nodes?
+        move |dom| {
+            dom.attr("href", &handle.link_target(&path).to_string())
+                .class_signal("routinator-active", self.signal_active(&path))
+                .event_with_options(&EventOptions::preventable(), move |e: events::Click| {
+                    if !e.ctrl_key() && !e.shift_key() {
+                        e.prevent_default();
+                        handle.goto(&path);
+                    }
+                })
+        }
+    }
+
+    pub fn signal_active(&self, path: &str) -> impl Signal<Item = bool> {
+        let handle = self.clone();
+        let route: Route = path.parse().unwrap();
+
+        self.root.signal_ref(move |p| {
+            route
+                .match_path(&p.skip(handle.parent.path.len()))
+                .is_some()
+        })
     }
 
     fn link_target(&self, target: &str) -> Path {
